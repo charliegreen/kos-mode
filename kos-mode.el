@@ -10,7 +10,6 @@
 ;; kOS. I hope this is useful for someone!
 
 ;; TODO:
-;;   * make indentation code not move POINT when POINT is after ^\s-*
 ;;   * make sure I got the syntax right and included all global functions and variables
 ;;   * add some nice completion thing for completing fields of data structures (eg
 ;;     SHIP:VELOCITY autofills ":SURFACE", which autofills ":MAG", etc)
@@ -50,6 +49,11 @@
   "Face for constants."
   :group 'kos-mode-faces)
 
+(defface kos-function-name-face
+  '((t :inherit (font-lock-function-name-face)))
+  "Face for highlighting the names of functions in their definitions."
+  :group 'kos-mode-faces)
+
 (defmacro kos--opt (keywords)
   "Prepare KEYWORDS for `looking-at'."
   `(eval-when-compile
@@ -59,10 +63,10 @@
   (defconst kos-keywords
     '("add" "all" "at" "batch" "break" "clearscreen" "compile" "copy" "declare"
       "delete" "deploy" "do" "do" "edit" "else" "file" "for" "from" "from"
-      "function" "global" "if" "in" "is" "list" "local" "lock" "log" "off" "on"
+      "function" "global" "if" "in" "is" "local" "lock" "log" "off" "on"
       "once" "parameter" "preserve" "print" "reboot" "remove" "rename" "run"
       "set" "shutdown" "stage" "step" "switch" "then" "to" "toggle" "unlock"
-      "unset" "until" "volume" "wait" "when")))
+      "unset" "until" "volume" "wait" "when" "return" "lazyglobal")))
 
 (eval-and-compile
   (defconst kos-globals
@@ -99,26 +103,37 @@
   (defconst kos-functions
     '("round" "mod" "abs" "ceiling" "floor" "ln" "log10" "max" "min" "random" "sqrt"
       "char" "unchar" "sin" "cos" "tan" "arcsin" "arccos" "arctan" "arctan2"
-      
-      "clearscreen" "stage" "constant" "profileresult"
-      "rgb" "rgba" "hsv" "hsva")))
+
+      "list" "rgb" "rgba" "hsv" "hsva"
+      "clearscreen" "stage" "constant" "profileresult")))
 
 (eval-and-compile
   (defconst kos-constants
     '("pi" "e" "g" "c" "atmtokpa" "kpatoatm" "degtorad" "radtodeg")))
 
+(defun kos--opt-nomember (keywords)
+  "Same as `kos--opt', except prepends a regex so that the resulting regex won't
+   match any words that are being accessed as members of structures (eg if you
+   had `(kos--opt-nomember '(\"foo\"))`, then 'foo' would be highlighted, but
+   'bar:foo' would not)"
+  (concat "\\(?:^\\|[^:]\\)" (kos--opt keywords)))
+
 (defconst kos-font-lock-keywords
   ;; aren't these regexes beautiful?
-  `((,(kos--opt kos-keywords) . 'kos-keyword-face)
-    ("\\+\\|-\\|\\*\\|/\\|\\^\\|(\\|)" . 'kos-operator-face)	; arithmetic ops
+  `((,(kos--opt-nomember kos-keywords) 1 'kos-keyword-face)
+
+    (,(kos--opt-nomember kos-globals) 1 'kos-global-face)
+    (,(kos--opt-nomember kos-constants) 1 'kos-constant-face)
+    ;; have this before operators so decimals are still highlighted
+    ("\\b[[:digit:].]+\\(e[+-]?[:digit:]+\\)?\\b" . 'kos-constant-face)
+
+    ("\\+\\|-\\|\\*\\|/\\|\\^\\|(\\|)" . 'kos-operator-face) ; arithmetic ops
     ("not\\|and\\|or\\|true\\|false\\|<>\\|<=\\|>=\\|=\\|>\\|<"	; logical ops
      . 'kos-operator-face)
-    ("{\\|}\\|\\[\\|\\]\\|,\\|\\.\\|:" . 'kos-operator-face) ; other ops
+    ("{\\|}\\|\\[\\|\\]\\|,\\|\\.\\|:\\|@" . 'kos-operator-face) ; other ops
 
-    ;; modify this regex so structure members sharing names with globals aren't highlighted
-    (,(concat "[^:]" (kos--opt kos-globals)) 1 'kos-global-face)
-    (,(kos--opt kos-constants) . 'kos-constant-face)
-    ("\\b[0-9.]+\\(e[+-][0-9]+\\)?\\b" . 'kos-constant-face))
+    ;; highlight function declarations
+    ("\\bfunction\\s-+\\([[:alpha:]_][[:alnum:]_]*?\\)\\s-+{" 1 'kos-function-name-face))
   "Keyword highlighting specification for `kos-mode'.")
 
 ;; (defvar kos-mode-map
@@ -129,28 +144,29 @@
 
 (defvar kos-mode-syntax-table
   (let ((st (make-syntax-table)))
-    (modify-syntax-entry ?/ "<1" st)
-    (modify-syntax-entry ?/ "<2" st)
-    (modify-syntax-entry ?\n ">" st)
+    (modify-syntax-entry ?/ ". 12" st)	; // starts comments
+    (modify-syntax-entry ?\n ">" st)	; newline ends comments
+    (modify-syntax-entry ?_ "_" st)	; `_' is symbol-level, not word
     st)
   "Syntax table for `kos-mode'.")
 
-;; see https://web.archive.org/web/20070702002238/http://two-wugs.net/emacs/mode-tutorial.html
+;; https://web.archive.org/web/20070702002238/http://two-wugs.net/emacs/mode-tutorial.html
 (defun kos-indent-line ()
   "Indent the current line of kOS code."
   (interactive)
-  (beginning-of-line)
-  (if (bobp) (indent-line-to 0)	; if at beginning of buffer, indent to 0
-    (let ((not-indented t) cur-indent)
-      (if (looking-at "^[ \t]*}")	; if closing a block
-	  (progn			; then indent one less than previous line
-	    (save-excursion
+  
+  (let ((not-indented t) cur-indent)
+    (save-excursion
+      (beginning-of-line)
+      (if (bobp)
+	  (setq cur-indent 0) ; if at beginning of buffer, indent to 0
+	(if (looking-at "^[ \t]*}")	; if closing a block
+	    (progn			; then indent one less than previous line
 	      (forward-line -1)
 	      (setq cur-indent (- (current-indentation) kos-indent))
 	      (if (< cur-indent 0)
-		  (setq cur-indent 0))))
-	(save-excursion
-	  (while not-indented		; else search backwards for clues
+		  (setq cur-indent 0)))
+	  (while not-indented	     ; else search backwards for clues
 	    (forward-line -1)
 	    (cond ((looking-at "^[ \t]*}[^{]*$") ; like an end of a block
 		   (progn
@@ -160,11 +176,18 @@
 		   (progn
 		     (setq cur-indent (+ (current-indentation) kos-indent))
 		     (setq not-indented nil)))
-		  ((bobp) (setq not-indented nil)))))) ; and perhaps just don't indent
-	(if cur-indent
-	    (indent-line-to cur-indent)
-	  (indent-line-to 0)))))
-
+		  ((bobp) (setq not-indented nil))))))) ; and perhaps just don't indent
+    
+    (if cur-indent nil (setq cur-indent 0))
+    ;; indent to cur-indent
+    (if (save-excursion			; if within indentation
+	  (let ((point (point))
+		(start (progn (beginning-of-line) (point)))
+		(end (progn (back-to-indentation) (point))))
+	    (and (<= start point) (<= point end))))
+	(indent-line-to cur-indent)  ; then indent line and move point
+      (save-excursion (indent-line-to cur-indent))))) ; else just indent line
+  
 ;;;###autoload
 (define-derived-mode kos-mode prog-mode "kOS"
   "Major mode for editing kOS program files, for the game Kerbal Space Program."
