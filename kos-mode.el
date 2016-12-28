@@ -10,10 +10,18 @@
 ;; kOS. I hope this is useful for someone!
 
 ;; TODO:
+;; bugs:
+;;   * make indentation function ignore braces in quotes
+;;   * make function-name-face highlighting work with brace-on-next-line style
+;;   * make unterminated statements indent line continuation
+;; features:
+;;   * potentially add custom faces for strings/comments
+;;   * add AGn action group highlighting
+
+;; TODO (long-term):
 ;;   * make sure I got the syntax right and included all global functions and variables
 ;;   * add some nice completion thing for completing fields of data structures (eg
 ;;     SHIP:VELOCITY autofills ":SURFACE", which autofills ":MAG", etc)
-;;   * add AGn action group highlighting
 ;;   * deal with highlighting function calls vs global variables, especially when they
 ;;     have the same name (eg STAGE)
 
@@ -128,12 +136,12 @@
     ("\\b[[:digit:].]+\\(e[+-]?[:digit:]+\\)?\\b" . 'kos-constant-face)
 
     ("\\+\\|-\\|\\*\\|/\\|\\^\\|(\\|)" . 'kos-operator-face) ; arithmetic ops
-    ("not\\|and\\|or\\|true\\|false\\|<>\\|<=\\|>=\\|=\\|>\\|<"	; logical ops
-     . 'kos-operator-face)
+    ("\\b\\(not\\|and\\|or\\|true\\|false\\|<>\\|<=\\|>=\\|=\\|>\\|<\\)\\b" ; logical ops
+     1 'kos-operator-face)
     ("{\\|}\\|\\[\\|\\]\\|,\\|\\.\\|:\\|@" . 'kos-operator-face) ; other ops
-
+    
     ;; highlight function declarations
-    ("\\bfunction\\s-+\\([[:alpha:]_][[:alnum:]_]*?\\)\\s-+{" 1 'kos-function-name-face))
+    ("\\bfunction\\s-+\\([[:alpha:]_][[:alnum:]_]*\\)" 1 'kos-function-name-face))
   "Keyword highlighting specification for `kos-mode'.")
 
 ;; (defvar kos-mode-map
@@ -154,29 +162,40 @@
 (defun kos-indent-line ()
   "Indent the current line of kOS code."
   (interactive)
-  
-  (let ((not-indented t) cur-indent)
+
+  ;; TODO: relative indentation should step backwards not one line,
+  ;; but repeatedly, until we find a line without only whitespace
+  (let ((not-indented t) cur-indent
+	(cur-line #'(lambda ()
+		      (let ((start (progn (beginning-of-line) (point)))
+			    (end (progn (end-of-line) (point))))
+			(buffer-substring-no-properties start end)))))
     (save-excursion
       (beginning-of-line)
       (if (bobp)
 	  (setq cur-indent 0) ; if at beginning of buffer, indent to 0
 	(if (looking-at "^[ \t]*}")	; if closing a block
-	    (progn			; then indent one less than previous line
+	    (progn	     ; then indent one less than previous line
+	      (message "line only closes block: `%s'" (funcall cur-line))
 	      (forward-line -1)
 	      (setq cur-indent (- (current-indentation) kos-indent))
 	      (if (< cur-indent 0)
 		  (setq cur-indent 0)))
 	  (while not-indented	     ; else search backwards for clues
 	    (forward-line -1)
-	    (cond ((looking-at "^[ \t]*}[^{]*$") ; like an end of a block
+	    (cond ((bobp) (setq not-indented nil)) ; perhaps we won't find anything
+		  ((looking-at "^\\s-*$") nil) ; continue if line is blank
+		  ((looking-at "^[ \t]*}[^{]*$") ; found the end of a block
 		   (progn
+		     (message "found end of block: `%s'" (funcall cur-line))
 		     (setq cur-indent (current-indentation))
 		     (setq not-indented nil)))
-		  ((looking-at "^.*{[^}]*$") ; or the beginning of a block
+		  ((looking-at "^[^\"\n]*?{[^}]*$") ; found the beginning of a block
+		  ;;((looking-at "^.*{[^}]*$") ; or the beginning of a block
 		   (progn
+		     (message "found beginning of block: `%s'" (funcall cur-line))
 		     (setq cur-indent (+ (current-indentation) kos-indent))
-		     (setq not-indented nil)))
-		  ((bobp) (setq not-indented nil))))))) ; and perhaps just don't indent
+		     (setq not-indented nil))))))))
     
     (if cur-indent nil (setq cur-indent 0))
     ;; indent to cur-indent
@@ -189,7 +208,7 @@
       (save-excursion (indent-line-to cur-indent))))) ; else just indent line
   
 ;;;###autoload
-(define-derived-mode kos-mode prog-mode "kOS"
+(define-derived-mode kos-mode prog-mode "KerboScript"
   "Major mode for editing kOS program files, for the game Kerbal Space Program."
   :syntax-table kos-mode-syntax-table
   (setq-local comment-start "// ")
@@ -202,3 +221,10 @@
 (add-to-list 'auto-mode-alist '("\\.ks\\'" . kos-mode))
 
 (provide 'kos-mode)
+
+;; ==================== for debugging only; TODO remove this
+(defun kos-mode-reload ()
+  (interactive)
+  (load "kos-mode/kos-mode")
+  (kos-mode))
+(global-set-key (kbd "C-c r") 'kos-mode-reload)
