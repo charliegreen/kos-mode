@@ -163,37 +163,46 @@
   "Indent the current line of kOS code."
   (interactive)
 
-  ;; TODO: relative indentation should step backwards not one line,
-  ;; but repeatedly, until we find a line without only whitespace
   (let ((not-indented t) cur-indent
+	(r-bob "^[^\"\n]*?{[^}]*$")	; beginning of block regex
 	(cur-line #'(lambda ()
-		      (let ((start (progn (beginning-of-line) (point)))
-			    (end (progn (end-of-line) (point))))
-			(buffer-substring-no-properties start end)))))
+		      (save-excursion
+			(let ((start (progn (beginning-of-line) (point)))
+			      (end (progn (end-of-line) (point))))
+			  (buffer-substring-no-properties start end)))))
+	(back-to-nonblank-line #'(lambda ()
+				   (let ((cont t))
+				     (while cont
+				       (forward-line -1)
+				       (if (not (looking-at "^\\s-*$"))
+					   (setq cont nil)))))))
     (save-excursion
       (beginning-of-line)
       (if (bobp)
 	  (setq cur-indent 0) ; if at beginning of buffer, indent to 0
-	(if (looking-at "^[ \t]*}")	; if closing a block
+	(if (looking-at "^[ \t]*}")	; if only closing a block
 	    (progn	     ; then indent one less than previous line
-	      (message "line only closes block: `%s'" (funcall cur-line))
-	      (forward-line -1)
-	      (setq cur-indent (- (current-indentation) kos-indent))
+	      ;;(message "line only closes block: `%s'" (funcall cur-line))
+	      (funcall back-to-nonblank-line)
+	      ;;(message "first nonempty: `%s'" (funcall cur-line))
+	      (setq cur-indent
+		    ;; if we're closing an empty block, match indentation
+		    (if (looking-at r-bob) (current-indentation)
+		      (- (current-indentation) kos-indent)))
 	      (if (< cur-indent 0)
 		  (setq cur-indent 0)))
+	  
 	  (while not-indented	     ; else search backwards for clues
-	    (forward-line -1)
+	    (funcall back-to-nonblank-line)
 	    (cond ((bobp) (setq not-indented nil)) ; perhaps we won't find anything
-		  ((looking-at "^\\s-*$") nil) ; continue if line is blank
 		  ((looking-at "^[ \t]*}[^{]*$") ; found the end of a block
 		   (progn
-		     (message "found end of block: `%s'" (funcall cur-line))
+		     ;;(message "found end of block: `%s'" (funcall cur-line))
 		     (setq cur-indent (current-indentation))
 		     (setq not-indented nil)))
-		  ((looking-at "^[^\"\n]*?{[^}]*$") ; found the beginning of a block
-		  ;;((looking-at "^.*{[^}]*$") ; or the beginning of a block
+		  ((looking-at r-bob) ; found the beginning of a block
 		   (progn
-		     (message "found beginning of block: `%s'" (funcall cur-line))
+		     ;;(message "found beginning of block: `%s'" (funcall cur-line))
 		     (setq cur-indent (+ (current-indentation) kos-indent))
 		     (setq not-indented nil))))))))
     
