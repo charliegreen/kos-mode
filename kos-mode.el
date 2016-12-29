@@ -11,9 +11,8 @@
 
 ;; TODO:
 ;; bugs:
-;;   * make indentation function ignore braces in quotes
-;;   * make function-name-face highlighting work with brace-on-next-line style
 ;;   * make unterminated statements indent line continuation
+;;   * make indentation code stop ignoring all lines with strings
 ;; features:
 ;;   * potentially add custom faces for strings/comments
 ;;   * add AGn action group highlighting
@@ -163,8 +162,9 @@
   "Indent the current line of kOS code."
   (interactive)
 
-  (let ((not-indented t) cur-indent
+  (let ((not-indented t) cur-indent (full-text "")
 	(r-bob "^[^\"\n]*?{[^}]*$")	; beginning of block regex
+	(r-nl "\\(?:\n\\|\r\n\\)")	; an actual newline
 	(cur-line #'(lambda ()
 		      (save-excursion
 			(let ((start (progn (beginning-of-line) (point)))
@@ -178,35 +178,57 @@
 					   (setq cont nil)))))))
     (save-excursion
       (beginning-of-line)
-      (if (bobp)
-	  (setq cur-indent 0) ; if at beginning of buffer, indent to 0
-	(if (looking-at "^[ \t]*}")	; if only closing a block
-	    (progn	     ; then indent one less than previous line
-	      ;;(message "line only closes block: `%s'" (funcall cur-line))
+      (setq full-text (concat (funcall cur-line) full-text))
+
+      (cond ((bobp) (setq cur-indent 0)) ; if at beginning of buffer, indent to 0
+	    ((looking-at "^[ \t]*}")	 ; if closing a block
+	     (progn			 ; then indent one less than previous line
 	      (funcall back-to-nonblank-line)
-	      ;;(message "first nonempty: `%s'" (funcall cur-line))
 	      (setq cur-indent
 		    ;; if we're closing an empty block, match indentation
 		    (if (looking-at r-bob) (current-indentation)
 		      (- (current-indentation) kos-indent)))
 	      (if (< cur-indent 0)
-		  (setq cur-indent 0)))
-	  
-	  (while not-indented	     ; else search backwards for clues
-	    (funcall back-to-nonblank-line)
-	    (cond ((bobp) (setq not-indented nil)) ; perhaps we won't find anything
-		  ((looking-at "^[ \t]*}[^{]*$") ; found the end of a block
-		   (progn
-		     ;;(message "found end of block: `%s'" (funcall cur-line))
-		     (setq cur-indent (current-indentation))
-		     (setq not-indented nil)))
-		  ((looking-at r-bob) ; found the beginning of a block
-		   (progn
-		     ;;(message "found beginning of block: `%s'" (funcall cur-line))
-		     (setq cur-indent (+ (current-indentation) kos-indent))
-		     (setq not-indented nil))))))))
-    
-    (if cur-indent nil (setq cur-indent 0))
+		  (setq cur-indent 0))))
+
+	    ((looking-at "^[ \t]*{")	; if opening a block on a blank line
+	     (progn			; then indent the same as last line
+	      (funcall back-to-nonblank-line)
+	      (setq cur-indent (current-indentation))))
+	    
+	    ((looking-back		; if inside an unterminated statement
+	      ;;(concat "^\\s-*" (kos--opt kos-keywords) "\\b\\s-*" "[^{.]*" r-nl))
+	      (concat "^\\s-*" (kos--opt kos-keywords) "\\b\\s-*"
+		      "\\(?:[^{.]*" "\\(?://.*\\)?" r-nl "\\)+"))
+	     (progn			; then indent one more than statement starter
+	       ;;(message "unterminated statement: `%s'" (match-string 0))
+	       (goto-char (match-beginning 0))
+	       ;;(message "starter: `%s'" (funcall cur-line))
+	       (setq cur-indent (+ (current-indentation) kos-indent))
+	       (setq not-indented nil)))
+
+	    (t	
+	     (while not-indented	     ; else search backwards for clues
+	       (funcall back-to-nonblank-line)
+	       (setq full-text (concat (funcall cur-line) full-text))
+	       (cond ((bobp) (setq not-indented nil)) ; perhaps we won't find anything
+		     
+		     ;; found the end of a block
+		     ((looking-at "^[ \t]*}[^{]*$")
+		      (progn
+			;;(message "found end of block: `%s'" (funcall cur-line))
+			(setq cur-indent (current-indentation))
+			(setq not-indented nil)))
+		     
+		     ;; found the beginning of a block
+		     ((looking-at r-bob)
+		      (progn
+			;;(message "found beginning of block: `%s'" (funcall cur-line))
+			(setq cur-indent (+ (current-indentation) kos-indent))
+			(setq not-indented nil))))))))
+		  
+    (if (not cur-indent) (setq cur-indent 0))
+    (if (< cur-indent 0) (setq cur-indent 0))
     ;; indent to cur-indent
     (if (save-excursion			; if within indentation
 	  (let ((point (point))
@@ -215,7 +237,7 @@
 	    (and (<= start point) (<= point end))))
 	(indent-line-to cur-indent)  ; then indent line and move point
       (save-excursion (indent-line-to cur-indent))))) ; else just indent line
-  
+
 ;;;###autoload
 (define-derived-mode kos-mode prog-mode "KerboScript"
   "Major mode for editing kOS program files, for the game Kerbal Space Program."
