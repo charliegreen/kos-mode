@@ -164,12 +164,13 @@
 
   (require 'cl)
 
-  (let ((not-indented t) cur-indent (full-text "")
+  (let ((not-indented t) cur-indent (cur-line "")
 	(r-bob "^[^\n]*?{[^}]*$")	; beginning of block regex
 	(r-nl "\\(?:\n\\|\r\n\\)")	; an actual newline
-	lb-str)	; set to whatever string the last `string-match' in `lb' was run on
+	lb-str ; set to whatever string the last `string-match' in `lb' was run on
+	iup)   ; for storing the output of `in-unterminated-p'
 
-    (cl-flet* ((cur-line ()
+    (cl-flet* ((get-cur-line ()
 			 (save-excursion
 			   (let ((start (progn (beginning-of-line) (point)))
 				 (end (progn (end-of-line) (point))))
@@ -194,13 +195,65 @@
 							  (not (any ?\"))))
 					      ?\")) s)
 				 (setq s (replace-match "" t t s))) s)
+
+	       (strip-text
+		(s) ;; remove strings and comments
+		(while (string-match
+			(rx (: ?\" (0+ (or (: ?\\ ?\")
+					   (not (any ?\")))) ?\")) s)
+		  (setq s (replace-match "" t t s)))
+		(while (string-match (concat "//.*" r-nl) s)
+		  (setq s (replace-match "" t t s))) s)
+
+	       (in-unterminated-p
+		()
+		;; Returns nil if in unterminated statement and the number of
+		;; lines back to the beginning of the statement otherwise
+		(save-excursion
+		  (let ((loopp t)	; whether we should keep searching
+			(rettp nil)	; whether we'll return a positive value
+			(count 0)	; number of lines we've processed before
+			(found-end-p nil) ; whether we've found a terminating line
+			cur-line)	  ; the current line we're processing
+		    (while (and loopp (not (bobp)))
+		      (setq cur-line (strip-text (get-cur-line)))
+		      ;;(kos-dbg "  checking line: `%s'" cur-line)
+		      (cond
+		       ;; found an unterminated statement
+		       ((string-match
+			 (concat "^\\s-*" (kos--opt kos-keywords) "\\b\\s-*"
+				 "[^{.]*$") ; content
+			 cur-line)
+			(setq loopp nil rettp t))
+
+		       ;; found a block opener
+		       ((string-match "^\\s-*{[^}]*$" cur-line)
+			(setq loopp nil))
+
+		       ;; found a block closer (which counts as terminator,
+		       ;; since it presumably has an opener) or a line ending
+		       ;; with a dot
+		       ((or
+			 (string-match ".*\\.\\s-*$" cur-line)
+			 (string-match "^\\s-*}[^{]*$" cur-line))
+			
+			;; check if count is zero so we don't indent whitespace
+			;; past the terminator
+			(if (and (not found-end-p) (zerop count))
+			    (progn
+			      (setq found-end-p t)
+			      '(kos-dbg "    found potential terminator"))
+			  (progn
+			    (setq loopp nil)
+			    '(kos-dbg "    found non-terminator, exiting")))))
+
+		      (if loopp (progn
+				  (setq count (1+ count))
+				  (forward-line -1))))
+		    (if rettp count nil))))
 	       
-	       (update-full-text ()
-				 (setq full-text
-				       (concat (remove-strings (cur-line)) full-text)))
-	       
-	       (la (r) (string-match r full-text)) ; `la' for `looking-at'
-	       (lal (r) (string-match r (remove-strings (cur-line))))
+	       ;;(la (r) (string-match r full-text)) ; `la' for `looking-at'
+	       (lal (r) (string-match r (remove-strings (get-cur-line))))
 
 	       (lb (r) ; `lb' for `looking-back'
 		   ;; (string-match
@@ -219,50 +272,53 @@
 			     (progn
 			       (setq loopp nil)
 			       (setq lb-str text)
-			       (kos-dbg "--------------------")
-			       (kos-dbg "  Raw: `%s'" (buffer-substring pos end))
-			       (kos-dbg "  Matched `%s'" text))
+			       ;; (kos-dbg "--------------------")
+			       ;; (kos-dbg "  Raw: `%s'" (buffer-substring pos end))
+			       ;; (kos-dbg "  Matched `%s'" text))
+			       )
 			   (setq pos (1- pos)))))
 		     (not loopp))))
 
       (save-excursion
 	(beginning-of-line)
-	(update-full-text)
-	
+	(setq cur-line (get-cur-line))
+
 	(cond ((bobp) (set-indent 0 t)) ; if at beginning of buffer, indent to 0
-	      ((la "^[ \t]*}")		; if closing a block
+	      ((lal "^[ \t]*}")		; if closing a block
 	       (progn	     ; then indent one less than previous line
 		 ;; TODO: check if previous line is part of a line continuation
 		 (back-to-nonblank-line)
-		 (if (looking-at r-bob) ; if we're closing an empty block, match indentation
-		     (set-indent 0)
-		   (set-indent -1))))
+		 (cond
+		  ;; if we're closing an empty block, match indentation
+		  ((looking-at r-bob) (set-indent 0))
+
+		  ;; if the line above us is indented from line continuation,
+		  ;; then indent back two
+		  ((progn
+		     (setq iup (in-unterminated-p))
+		     (and (not (null iup))
+			  (not (= iup 0))))
+		   (set-indent -2))
+		  
+		  ;; otherwise, indent back one
+		  (t (set-indent -1)))))
 	      
-	      ((la "^[ \t]*{")	; if opening a block on a blank line
+	      ((lal "^[ \t]*{")	; if opening a block on a blank line
 	       (progn			; then indent the same as last line
 		 (back-to-nonblank-line)
 		 (set-indent 0)))
 	      
-	      ((lb		 ; if inside an unterminated statement
-		;;(concat "^\\s-*" (kos--opt kos-keywords) "\\b\\s-*" "[^{.]*" r-nl))
-		(concat "\\s-*" (kos--opt kos-keywords) "\\b\\s-*"
-			"\\(?:[^{.]*"  	; content
-			"\\(?://.*\\)?"	; an optional comment
-			r-nl "\\)+"))
-	       (progn			; then indent one more than statement starter
-		 (kos-dbg "--------------------------------")
-		 (kos-dbg "unterminated statement:")
-		 (kos-dbg "    `%s'" (match-string 0 lb-str))
-		 
-		 ;;(goto-char (match-beginning 0))
-		 (goto-char (+ (- (point) (length lb-str)) (match-beginning 0)))
-		 (kos-dbg "starter: `%s'" (cur-line))
+	      ((progn
+		 (setq iup (in-unterminated-p))
+		 (and (not (null iup))
+		      (not (= iup 0))))
+	       (progn
+		 (forward-line (- iup))
 		 (set-indent +1)))
 	      
 	      (t
 	       (while not-indented	     ; else search backwards for clues	 
 		 (back-to-nonblank-line)
-		 (update-full-text)
 
 		 (cond
 		  ((bobp) (setq not-indented nil)) ; perhaps we won't find anything
