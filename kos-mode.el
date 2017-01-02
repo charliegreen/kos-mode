@@ -174,36 +174,31 @@
 			   (let ((start (progn (beginning-of-line) (point)))
 				 (end (progn (end-of-line) (point))))
 			     (buffer-substring-no-properties start end))))
+	       
 	       (back-to-nonblank-line ()
 				      (let ((cont t))
-					;;(kos-dbg "in `back-to-nonblank-line':")
 					(while cont
-					  ;;(kos-dbg "  line: `%s'" (cur-line))
 					  (forward-line -1)
-					  (if (or (bobp)
-						  (not (looking-at "^\\s-*$")))
-					      (progn
-						(setq cont nil)
-						;;(kos-dbg "  ended on line: `%s'" (cur-line))
-						)))))
+					  (if (or (bobp) (not (looking-at "^\\s-*$")))
+					      (setq cont nil)))))
+	       
 	       (set-indent (v &optional not-relative)
 			   (setq cur-indent (if not-relative v
 					      (+ (current-indentation)
 						 (* v kos-indent))))
 			   (setq not-indented nil))
+	       
 	       (remove-strings (s)
-			       ;;(while (string-match "\"\\(?:\\\"\\|[^\"]\\)*\"" s)
 			       (while (string-match
-				       (rx (: ?\"
-					      (0+ (or (: ?\\ ?\")
-						      (not (any ?\"))))
-					      ?\"))
-				       s)
+				       (rx (: ?\" (0+ (or (: ?\\ ?\")
+							  (not (any ?\"))))
+					      ?\")) s)
 				 (setq s (replace-match "" t t s))) s)
+	       
 	       (update-full-text ()
 				 (setq full-text
-				       (concat (remove-strings (cur-line))
-					       full-text)))
+				       (concat (remove-strings (cur-line)) full-text)))
+	       
 	       (la (r) (string-match r full-text)) ; `la' for `looking-at'
 	       (lal (r) (string-match r (remove-strings (cur-line))))
 
@@ -212,16 +207,6 @@
 		   ;;  (concat "\\`\\(?:.\\|\n\\)*\\(" r "\\)\\'")
 		   ;;  (buffer-substring-no-properties (point-min) (point)))))
 		   
-		   ;; (kos-dbg "Running `lb':")
-		   ;; (let* ((text (buffer-substring-no-properties (point-min) (point)))
-		   ;; 	  (pos (length text))
-		   ;; 	  (loopp t))
-		   ;;   (while (and (> pos 1) loopp)
-		   ;;     (if (string-match r (substring text pos))
-		   ;; 	   (setq loopp nil)
-		   ;; 	 (setq pos (1- pos))))
-		   ;;   (not (null pos)))))
-
 		   (setq r (concat r "\\'"))
 		   (let ((pos (point))
 		   	 (end (point))
@@ -239,12 +224,6 @@
 			       (kos-dbg "  Matched `%s'" text))
 			   (setq pos (1- pos)))))
 		     (not loopp))))
-
-		   ;; (let ((text (remove-strings (buffer-substring (point-min) (point)))))
-		   ;;   ;;(with-current-buffer (get-buffer-create "lbbuf")
-		   ;;   (with-temp-buffer
-		   ;;     (insert text)
-		   ;;     (looking-back r)))))
 
       (save-excursion
 	(beginning-of-line)
@@ -285,15 +264,10 @@
 		 (back-to-nonblank-line)
 		 (update-full-text)
 
-		 (cond ((bobp) (setq not-indented nil)) ; perhaps we won't find anything
-		       ((lal "^[ \t]*}[^{]*$") ; found the end of a block
-		 	(progn
-		 	  ;;(message "found end of block: `%s'" (cur-line))
-		 	  (set-indent 0)))
-		       ((lal r-bob)   ; found the beginning of a block
-		 	(progn
-		 	  ;;(message "found beginning of block: `%s'" (cur-line))
-		 	  (set-indent +1))))))))
+		 (cond
+		  ((bobp) (setq not-indented nil)) ; perhaps we won't find anything
+		  ((lal "^[ \t]*}[^{]*$") (set-indent 0)) ; found the end of a block
+		  ((lal r-bob) (set-indent +1)))))))) ; found the beginning of a block
 
       (if (not cur-indent) (setq cur-indent 0))
       (if (< cur-indent 0) (setq cur-indent 0))
@@ -305,7 +279,7 @@
 		  (end (progn (back-to-indentation) (point))))
 	      (and (<= start point) (<= point end))))
 	  (indent-line-to cur-indent) ; then indent line and move point
-	(save-excursion (indent-line-to cur-indent)))))) ; else just indent line
+	(save-excursion (indent-line-to cur-indent))))) ; else just indent line
 
 ;;;###autoload
 (define-derived-mode kos-mode prog-mode "KerboScript"
