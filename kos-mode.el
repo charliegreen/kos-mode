@@ -2,7 +2,7 @@
 
 ;; Author: Charlie Green
 ;; URL: https://github.com/charliegreen/kos-mode
-;; Version: 0.1
+;; Version: 0.2
 
 ;;; Commentary:
 
@@ -10,12 +10,12 @@
 ;; kOS. I hope this is useful for someone!
 
 ;; TODO:
-;; bugs:
-;;   * make unterminated statements indent line continuation
-;;   * make indentation code stop ignoring all lines with strings
 ;; features:
 ;;   * potentially add custom faces for strings/comments
 ;;   * add AGn action group highlighting
+;;   * add useful interactive commands (eg electric braces)
+;; other:
+;;   * yikes, clean up some of the regexes here....
 
 ;; TODO (long-term):
 ;;   * make sure I got the syntax right and included all global functions and variables
@@ -23,6 +23,7 @@
 ;;     SHIP:VELOCITY autofills ":SURFACE", which autofills ":MAG", etc)
 ;;   * deal with highlighting function calls vs global variables, especially when they
 ;;     have the same name (eg STAGE)
+;;   * add an optional auto-formatter
 
 (defgroup kos-mode ()
   "Options for `kos-mode'."
@@ -131,12 +132,20 @@
 
     (,(kos--opt-nomember kos-globals) 1 'kos-global-face)
     (,(kos--opt-nomember kos-constants) 1 'kos-constant-face)
-    ;; have this before operators so decimals are still highlighted
+
+    ;; for numbers; have this before operators so decimals are still highlighted
     ("\\b[[:digit:].]+\\(e[+-]?[:digit:]+\\)?\\b" . 'kos-constant-face)
 
+    ;; ((rx (any ?+ ?- ?* ?/ ?^ ?( ?))) . 'kos-operator-face)   ; arithmetic ops
     ("\\+\\|-\\|\\*\\|/\\|\\^\\|(\\|)" . 'kos-operator-face) ; arithmetic ops
+
+    ;; ((rx word-boundary
+    ;; 	(or "not" "and" "or" "true" "false" "<>" "<=" ">=" "=" ">" "<")
+    ;; 	word-boundary) 1 'kos-operator-face)				    ; logical ops
     ("\\b\\(not\\|and\\|or\\|true\\|false\\|<>\\|<=\\|>=\\|=\\|>\\|<\\)\\b" ; logical ops
      1 'kos-operator-face)
+
+    ;;((rx (any ?{ ?} ?[ ?] ?, ?. ?: ?@)) . 'kos-operator-face) ; other ops    
     ("{\\|}\\|\\[\\|\\]\\|,\\|\\.\\|:\\|@" . 'kos-operator-face) ; other ops
     
     ;; highlight function declarations
@@ -153,7 +162,6 @@
   (let ((st (make-syntax-table)))
     (modify-syntax-entry ?/ ". 12" st)	; // starts comments
     (modify-syntax-entry ?\n ">" st)	; newline ends comments
-    (modify-syntax-entry ?_ "_" st)	; `_' is symbol-level, not word
     st)
   "Syntax table for `kos-mode'.")
 
@@ -164,11 +172,10 @@
 
   (require 'cl)
 
-  (let ((not-indented t) cur-indent (cur-line "")
+  (let ((not-indented t) cur-indent
 	(r-bob "^[^\n]*?{[^}]*$")	; beginning of block regex
-	(r-nl "\\(?:\n\\|\r\n\\)")	; an actual newline
-	lb-str ; set to whatever string the last `string-match' in `lb' was run on
-	iup)   ; for storing the output of `in-unterminated-p'
+	(r-nl "\\(?:\n\\|\r\n\\|$\\)")	; an actual newline ($ was acting funky)
+	(ltss nil)) ; lines to start of (unterminated) statement; see `in-unterminated-p'
 
     (cl-flet* ((get-cur-line ()
 			 (save-excursion
@@ -189,13 +196,6 @@
 						 (* v kos-indent))))
 			   (setq not-indented nil))
 	       
-	       (remove-strings (s)
-			       (while (string-match
-				       (rx (: ?\" (0+ (or (: ?\\ ?\")
-							  (not (any ?\"))))
-					      ?\")) s)
-				 (setq s (replace-match "" t t s))) s)
-
 	       (strip-text
 		(s) ;; remove strings and comments
 		(while (string-match
@@ -209,6 +209,7 @@
 		()
 		;; Returns nil if in unterminated statement and the number of
 		;; lines back to the beginning of the statement otherwise
+		(setq ltss nil)
 		(save-excursion
 		  (let ((loopp t)	; whether we should keep searching
 			(rettp nil)	; whether we'll return a positive value
@@ -217,15 +218,13 @@
 			cur-line)	  ; the current line we're processing
 		    (while (and loopp (not (bobp)))
 		      (setq cur-line (strip-text (get-cur-line)))
-		      ;;(kos-dbg "  checking line: `%s'" cur-line)
 		      (cond
 		       ;; found an unterminated statement
 		       ((string-match
-			 (concat "^\\s-*" (kos--opt kos-keywords) "\\b\\s-*"
-				 "[^{.]*$") ; content
+			 (concat "^\\s-*" (kos--opt kos-keywords) "\\b\\s-*[^{.]*$")
 			 cur-line)
 			(setq loopp nil rettp t))
-
+		       
 		       ;; found a block opener
 		       ((string-match "^\\s-*{[^}]*$" cur-line)
 			(setq loopp nil))
@@ -240,48 +239,25 @@
 			;; check if count is zero so we don't indent whitespace
 			;; past the terminator
 			(if (and (not found-end-p) (zerop count))
-			    (progn
-			      (setq found-end-p t)
-			      '(kos-dbg "    found potential terminator"))
+			    (setq found-end-p t)
+			  (setq loopp nil))))
+
+		      ;; at end of each loop, if we don't want to break, update
+		      ;; counter and move POINT to next line to process
+		      (if loopp
 			  (progn
-			    (setq loopp nil)
-			    '(kos-dbg "    found non-terminator, exiting")))))
+			    (setq count (1+ count))
+			    (forward-line -1))))
+		    (if (not rettp) nil
+		      (progn
+			(setq ltss count)
+			(not (= count 0)))))))
 
-		      (if loopp (progn
-				  (setq count (1+ count))
-				  (forward-line -1))))
-		    (if rettp count nil))))
-	       
-	       ;;(la (r) (string-match r full-text)) ; `la' for `looking-at'
-	       (lal (r) (string-match r (remove-strings (get-cur-line))))
-
-	       (lb (r) ; `lb' for `looking-back'
-		   ;; (string-match
-		   ;;  (concat "\\`\\(?:.\\|\n\\)*\\(" r "\\)\\'")
-		   ;;  (buffer-substring-no-properties (point-min) (point)))))
-		   
-		   (setq r (concat r "\\'"))
-		   (let ((pos (point))
-		   	 (end (point))
-		   	 (loopp t))
-		     (while (and (>= pos (point-min)) loopp)
-		       ;;(kos-dbg "  Trying `%s'" (buffer-substring-no-properties pos end))
-		       (let ((text (remove-strings
-				    (buffer-substring-no-properties pos end))))
-			 (if (string-match r text)
-			     (progn
-			       (setq loopp nil)
-			       (setq lb-str text)
-			       ;; (kos-dbg "--------------------")
-			       ;; (kos-dbg "  Raw: `%s'" (buffer-substring pos end))
-			       ;; (kos-dbg "  Matched `%s'" text))
-			       )
-			   (setq pos (1- pos)))))
-		     (not loopp))))
+	       ;; for "looking-at-line"
+	       (lal (r) (string-match r (strip-text (get-cur-line)))))
 
       (save-excursion
 	(beginning-of-line)
-	(setq cur-line (get-cur-line))
 
 	(cond ((bobp) (set-indent 0 t)) ; if at beginning of buffer, indent to 0
 	      ((lal "^[ \t]*}")		; if closing a block
@@ -289,41 +265,27 @@
 		 ;; TODO: check if previous line is part of a line continuation
 		 (back-to-nonblank-line)
 		 (cond
-		  ;; if we're closing an empty block, match indentation
-		  ((looking-at r-bob) (set-indent 0))
-
-		  ;; if the line above us is indented from line continuation,
-		  ;; then indent back two
-		  ((progn
-		     (setq iup (in-unterminated-p))
-		     (and (not (null iup))
-			  (not (= iup 0))))
+		  ((looking-at r-bob) (set-indent 0)) ; if closing empty block, match it
+		  ((in-unterminated-p)	    ; if last line unterminated, indent back two
 		   (set-indent -2))
-		  
-		  ;; otherwise, indent back one
-		  (t (set-indent -1)))))
+		  (t (set-indent -1))))) ; otherwise, indent back one
 	      
-	      ((lal "^[ \t]*{")	; if opening a block on a blank line
+	      ((lal "^[ \t]*{")		; if opening a block on a blank line
 	       (progn			; then indent the same as last line
 		 (back-to-nonblank-line)
 		 (set-indent 0)))
 	      
-	      ((progn
-		 (setq iup (in-unterminated-p))
-		 (and (not (null iup))
-		      (not (= iup 0))))
-	       (progn
-		 (forward-line (- iup))
+	      ((in-unterminated-p)	; if line part of unterminated statement
+	       (progn			; then indent one more than beginning
+		 (forward-line (- ltss))
 		 (set-indent +1)))
 	      
-	      (t
-	       (while not-indented	     ; else search backwards for clues	 
-		 (back-to-nonblank-line)
-
-		 (cond
-		  ((bobp) (setq not-indented nil)) ; perhaps we won't find anything
-		  ((lal "^[ \t]*}[^{]*$") (set-indent 0)) ; found the end of a block
-		  ((lal r-bob) (set-indent +1)))))))) ; found the beginning of a block
+	      (t (while not-indented	; else search backwards for clues	 
+		   (back-to-nonblank-line)
+		   (cond
+		    ((bobp) (setq not-indented nil)) ; perhaps we won't find anything
+		    ((lal "^[ \t]*}[^{]*$") (set-indent 0)) ; found the end of a block
+		    ((lal r-bob) (set-indent +1)))))))) ; found the beginning of a block
 
       (if (not cur-indent) (setq cur-indent 0))
       (if (< cur-indent 0) (setq cur-indent 0))
@@ -334,7 +296,7 @@
 		  (start (progn (beginning-of-line) (point)))
 		  (end (progn (back-to-indentation) (point))))
 	      (and (<= start point) (<= point end))))
-	  (indent-line-to cur-indent) ; then indent line and move point
+	  (indent-line-to cur-indent)	; then indent line and move point
 	(save-excursion (indent-line-to cur-indent))))) ; else just indent line
 
 ;;;###autoload
@@ -351,24 +313,3 @@
 (add-to-list 'auto-mode-alist '("\\.ks\\'" . kos-mode))
 
 (provide 'kos-mode)
-
-;; ==================== for debugging only; TODO remove this
-(defun kos-mode-reload ()
-  (interactive)
-  (load "kos-mode/kos-mode")
-  (kos-mode))
-(global-set-key (kbd "C-c r") 'kos-mode-reload)
-
-(defun kos-dbg (fmt &rest args)
-  (let ((buf (current-buffer)))
-    (pop-to-buffer (get-buffer-create "debug"))
-    (end-of-buffer)
-    (insert (apply 'format (cons fmt args)) "\n")
-    (pop-to-buffer buf)))
-
-(defun kos-test-debug ()
-  (interactive)
-  (kos-dbg "Hello!")
-  (kos-dbg "and another, with formatting: `%d' is 0." 0))
-(global-set-key (kbd "C-c d") 'kos-test-debug)
-
