@@ -2,12 +2,12 @@
 
 ;; Author: Charlie Green
 ;; URL: https://github.com/charliegreen/kos-mode
-;; Version: 0.2
+;; Version: 0.2.1
 
 ;;; Commentary:
 
 ;; A major mode for editing KerboScript program files, from the Kerbal Space Program mod
-;; kOS. I hope this is useful for someone!
+;; kOS.  I hope this is useful for someone!
 
 ;; TODO:
 ;; features:
@@ -24,6 +24,8 @@
 ;;   * deal with highlighting function calls vs global variables, especially when they
 ;;     have the same name (eg STAGE)
 ;;   * add an optional auto-formatter
+
+;;; Code:
 
 (defgroup kos-mode ()
   "Options for `kos-mode'."
@@ -63,7 +65,7 @@
   :group 'kos-mode-faces)
 
 (defmacro kos--opt (keywords)
-  "Prepare KEYWORDS for `looking-at'."
+  "Compile a regex matching any of KEYWORDS."
   `(eval-when-compile
      (regexp-opt ,keywords 'words)))
 
@@ -120,10 +122,12 @@
     '("pi" "e" "g" "c" "atmtokpa" "kpatoatm" "degtorad" "radtodeg")))
 
 (defun kos--opt-nomember (keywords)
-  "Same as `kos--opt', except prepends a regex so that the resulting regex won't
-   match any words that are being accessed as members of structures (eg if you
-   had `(kos--opt-nomember '(\"foo\"))`, then 'foo' would be highlighted, but
-   'bar:foo' would not)"
+  "Compile a regex matching any of KEYWORDS with no leading colon.
+
+This is the same as `kos--opt', except it won't match any of
+KEYWORDS if they are being accessed as a structure member (eg,
+for `(kos--opt-nomember '(\"foo\"))`, 'foo' would be highlighted,
+but 'bar:foo' would not)."
   (concat "\\(?:^\\|[^:]\\)" (kos--opt keywords)))
 
 (defconst kos-font-lock-keywords
@@ -145,7 +149,7 @@
     ("\\b\\(not\\|and\\|or\\|true\\|false\\|<>\\|<=\\|>=\\|=\\|>\\|<\\)\\b" ; logical ops
      1 'kos-operator-face)
 
-    ;;((rx (any ?{ ?} ?[ ?] ?, ?. ?: ?@)) . 'kos-operator-face) ; other ops    
+    ;;((rx (any ?{ ?} ?[ ?] ?, ?. ?: ?@)) . 'kos-operator-face) ; other ops
     ("{\\|}\\|\\[\\|\\]\\|,\\|\\.\\|:\\|@" . 'kos-operator-face) ; other ops
     
     ;; highlight function declarations
@@ -280,7 +284,7 @@
 		 (forward-line (- ltss))
 		 (set-indent +1)))
 	      
-	      (t (while not-indented	; else search backwards for clues	 
+	      (t (while not-indented	; else search backwards for clues
 		   (back-to-nonblank-line)
 		   (cond
 		    ((bobp) (setq not-indented nil)) ; perhaps we won't find anything
@@ -303,13 +307,19 @@
 (define-derived-mode kos-mode prog-mode "KerboScript"
   "Major mode for editing kOS program files, for the game Kerbal Space Program."
   :syntax-table kos-mode-syntax-table
-  (setq-local comment-start "// ")
-  (setq-local comment-start-skip "//+\\s-*")
-  (setq-local font-lock-defaults
-	      '(kos-font-lock-keywords nil t)) ; t makes this case-insensitive
-  (setq-local indent-line-function 'kos-indent-line))
+  (make-local-variable 'comment-start)
+  (make-local-variable 'comment-start-skip)
+  (make-local-variable 'font-lock-defaults)
+  (make-local-variable 'indent-line-function)
+  (setq comment-start "// ")
+  (setq comment-start-skip "//+\\s-*")
+  (setq font-lock-defaults
+	'(kos-font-lock-keywords nil t)) ; t makes this case-insensitive
+  (setq indent-line-function 'kos-indent-line))
 
 ;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.ks\\'" . kos-mode))
 
 (provide 'kos-mode)
+
+;;; kos-mode.el ends here
