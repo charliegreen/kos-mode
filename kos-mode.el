@@ -170,7 +170,7 @@
   "Indent the current line of kOS code."
   (interactive)
 
-  (require 'cl)
+  (require 'cl-lib)
 
   (let ((not-indented t) cur-indent
 	(r-bob "^[^\n]*?{[^}]*$")	; beginning of block regex
